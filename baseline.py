@@ -2,6 +2,7 @@ from prefect import flow, tags, task
 from prefect.futures import wait
 from prefect.cache_policies import DEFAULT, TASK_SOURCE, INPUTS
 from prefect.assets import materialize
+from prefect.runtime import task_run
 from typing import TypedDict
 import csv
 import os
@@ -109,49 +110,97 @@ def baseline():
     #     # log.info(f"University: {uni['name']}, Website: {uni['website']}")
     # wait(results)
 
+    # unis = unis[5:6]
+    unis = unis[0:2]
+
     jobs = []
     for index, item in enumerate(unis):
         print(f"Processing {index + 1}/{len(unis)}: {item['name']} ({item['website']})")
         site = item["website"]
         einrichtung = item["name"]
-        if index > 5:
-            break
+        # if index > 5:
+        #     break
 
         # , "OpenOLAT", "Canvas", "Stud.IP"]:
-        for software in ["Moodle"]:
-        # for software in ["Moodle", "Ilias", "OpenOLAT"]:
+        #for software in ["Moodle"]:
+        for software in ["Moodle", "Ilias", "OpenOLAT"]:
             # if (einrichtung, software) in combos_done:
             #     log.info(f"Skipping {einrichtung} - {software}, already done")
             #     continue
             query = f"site:{site} {software}"
-            arguments = {"software": software, "einrichtung": einrichtung}
+            arguments = {"einrichtung": einrichtung, "software": software}
             r = handle_uni.submit(query, prompt_template=prompt_template, arguments=arguments, output_file=output_file)
             jobs.append(r)
             # print(r)
     wait(jobs)
 
-@task
-def store_result(result, filename: str):
-    with open(filename, "a") as f:
-        f.write(json.dumps(result) + "\n")
+# @task
+# def store_result(result, filename: str):
+#     with open(filename, "a") as f:
+#         f.write(json.dumps(result) + "\n")
 
 
-@task(log_prints=True)
+def _handle_uni_task_name():
+    task_name = task_run.task_name
+    parameters = task_run.parameters
+    arguments = parameters.get("arguments", {})
+    new_name = f"{task_name}-{arguments.get('einrichtung','unknown')}-{arguments.get('software','unknown')}"
+    new_name = new_name.replace(" ", "-").lower()
+    return new_name
+
+@task(log_prints=True, task_run_name=_handle_uni_task_name)
 def handle_uni(query, prompt_template, arguments, output_file):
-    output_url = "file://" + os.path.abspath(output_file)
+    # Google search
+    urls = google_search(query, skip_cache=False)
+        
+    combined_verdict = False
+    scraping_results = []
+    urls = urls[:5]
+    for url in urls:
 
-    # Step 1: Google search
-    results = google_search(query, skip_cache=False)
-    # store_func = materialize(output_url)(store_result)
-    for result in results:
-        #print(result)
-        x = scrape_url(url=result,
+        # Scrape URL and apply LLM:
+        result = scrape_url(url=url,
                         prompt_template=prompt_template,
                         arguments=arguments)
-        print("Storing result for", arguments["einrichtung"])
-        print(x)
-        store_result(x.model_dump_json(), output_file)
-        return x
+
+        scraping_results.append(result)
+        if result.result:
+            combined_verdict = True
+            # exit early
+            break
+
+    combined_inputs = [
+        {"url": url, "result": result.result, "reasoning": result.reasoning}
+        for url, result in zip(urls, scraping_results)
+    ]
+
+    if not combined_verdict:
+        summary = "No evidence found"
+    else:
+        summary = "Evidence found"
+
+    combined_reasoning = {
+        'summary': summary,
+        'inputs': combined_inputs,
+    }
+
+    res_item = {
+        # "einrichtung": einrichtung,
+        # "software": software,
+        "result": combined_verdict,
+    }
+    res_item.update(arguments)
+    res_item['reasoning'] = combined_reasoning
+    
+    with open(output_file, "a") as f:
+        f.write(json.dumps(res_item) + "\n")
+
+    return res_item
+
+        # print("Storing result for", arguments["einrichtung"])
+        # print(x)
+        # store_result(x.model_dump_json(), output_file)
+        # return x
     
 
 
