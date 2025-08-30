@@ -14,6 +14,7 @@ from googleapiclient.discovery import build
 from tasks.scraper import scrape_url  # Importing the scrape_url task
 import asyncio
 import json
+
 log = logging.getLogger("baseline")
 
 class UniversityDict(TypedDict):
@@ -85,8 +86,11 @@ def google_search(query: str, skip_cache=False) -> list[str]:
 def baseline():
     input_file = '../einrichtungen/data/hochschulen.csv'
     output_file = "results_new.jsonlines"
+    prompt_template = """Finde heraus ob aus dem Text hervorgeht, dass {software} oder eine auf
+    {software} basierende Software in der Einrichtung {einrichtung} genutzt wird. Antworte im
+    JSON-Format. Gebe eine kurze Begründung im Feld `reasoning` an, sowie das Ergebnis
+    `true` oder `false` im Feld `result`."""
 
-    log = logging.getLogger("baseline")
     # log.info(f"Reading universities from {filename}")
     
     try:
@@ -120,11 +124,13 @@ def baseline():
             #     log.info(f"Skipping {einrichtung} - {software}, already done")
             #     continue
             query = f"site:{site} {software}"
-            r = handle_uni.submit(query, "Fasse bitte diese Seite in 2-3 Sätzen zusammen.", {"software": software, "einrichtung": einrichtung}, output_file)
+            arguments = {"software": software, "einrichtung": einrichtung}
+            r = handle_uni.submit(query, prompt_template=prompt_template, arguments=arguments, output_file=output_file)
             jobs.append(r)
             # print(r)
     wait(jobs)
 
+@task
 def store_result(result, filename: str):
     with open(filename, "a") as f:
         f.write(json.dumps(result) + "\n")
@@ -136,15 +142,15 @@ def handle_uni(query, prompt_template, arguments, output_file):
 
     # Step 1: Google search
     results = google_search(query, skip_cache=False)
-    store_func = materialize(output_url)(store_result)
+    # store_func = materialize(output_url)(store_result)
     for result in results:
-        print(result)
+        #print(result)
         x = scrape_url(url=result,
-                        prompt_template="Fasse bitte diese Seite in 2-3 Sätzen zusammen.",
-                        arguments={})
+                        prompt_template=prompt_template,
+                        arguments=arguments)
         print("Storing result for", arguments["einrichtung"])
         print(x)
-        store_func(x.model_dump_json(), output_file)
+        store_result(x.model_dump_json(), output_file)
         return x
     
 

@@ -11,15 +11,14 @@ from pydantic import BaseModel, TypeAdapter
 
 from crawl4ai_helpers import ChunkLimitedLLMExtractionStrategy
 from prefect import flow, tags, task
+from prefect.logging import get_run_logger
 from prefect.utilities.asyncutils import sync_compatible
 from prefect.cache_policies import TASK_SOURCE, INPUTS
-
-log = logging.getLogger(__name__)
 
 
 class LMSResult(BaseModel):
     reasoning: str
-    software_usage_found: bool
+    result: bool
     error: Literal[False] = False
 
 class ErrorBlock(BaseModel):
@@ -31,6 +30,8 @@ class ErrorBlock(BaseModel):
 @sync_compatible
 @task(cache_policy=TASK_SOURCE+INPUTS)
 async def scrape_url(url: str, prompt_template: str, arguments: dict, skip_cache=False) -> LMSResult:
+
+    log = get_run_logger()
 
     log.info(f"Scraping URL: {url} for {arguments}")
     is_pdf = False
@@ -100,7 +101,7 @@ async def scrape_url(url: str, prompt_template: str, arguments: dict, skip_cache
 
         if not result.extracted_content:
             log.warning("⚠️ No content extracted")
-            return LMSResult(reasoning="(No content extracted)", software_usage_found=False)
+            return LMSResult(reasoning="(No content extracted)", result=False)
 
 
         log.info("result.error_message: %s", result.error_message)
@@ -114,12 +115,12 @@ async def scrape_url(url: str, prompt_template: str, arguments: dict, skip_cache
             log.warning("The extracted content might not be valid JSON.")
             log.warning("Extracted content: %s", result.extracted_content)
             raise
-            return LMSResult(reasoning="(JSON decoding error)", software_usage_found=False)
+            return LMSResult(reasoning="(JSON decoding error)", result=False)
         except Exception as e:
             log.warning(f"⚠️ Error validating JSON: {e}")
             log.warning("Extracted content: %s", result.extracted_content)
             raise
-            return LMSResult(reasoning="(Error validating JSON)", software_usage_found=False)
+            return LMSResult(reasoning="(Error validating JSON)", result=False)
 
         # # combine chunks into a single reasoning
         # chunks = []
@@ -129,7 +130,7 @@ async def scrape_url(url: str, prompt_template: str, arguments: dict, skip_cache
         #             f"Error in block {item.index}: {item.content}")
             
         #     chunks.append({
-        #         "software_usage_found": item.software_usage_found,
+        #         "result": item.result,
         #         "reasoning": item.reasoning
         #     })
 
@@ -138,7 +139,7 @@ async def scrape_url(url: str, prompt_template: str, arguments: dict, skip_cache
             if isinstance(item, ErrorBlock):
                 raise RuntimeError(
                     f"Error in block {item.index}: {item.content}")
-            if item.software_usage_found:
+            if item.result:
                 positive.append(item.reasoning)
 
         usage_found = len(positive) > 0
@@ -149,4 +150,4 @@ async def scrape_url(url: str, prompt_template: str, arguments: dict, skip_cache
             # reasoning = f"URL: {url};"
             reasoning = "No mention found."
 
-        return LMSResult(reasoning=reasoning, software_usage_found=usage_found)
+        return LMSResult(reasoning=reasoning, result=usage_found)
