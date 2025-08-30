@@ -1,0 +1,18 @@
+[project]
+name = "prefect-test"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "crawl4ai[pdf]>=0.7.3",
+    "google-api-python-client>=2.179.0",
+    "langchain-openai>=0.3.30",
+    "openai>=1.99.9",
+    "prefect>=3.4.12",
+]
+
+[dependency-groups]
+dev = [
+    "google-api-python-client-stubs>=1.30.0",
+]
