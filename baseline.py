@@ -1,8 +1,11 @@
 from prefect import flow, tags, task
+from prefect.concurrency.sync import concurrency
 from prefect.futures import wait
 from prefect.cache_policies import DEFAULT, TASK_SOURCE, INPUTS
+from prefect.task_runners import ThreadPoolTaskRunner
 from prefect.assets import materialize
 from prefect.runtime import task_run
+from prefect.logging import get_run_logger
 from typing import TypedDict
 import csv
 import os
@@ -60,13 +63,25 @@ def read_universities(filename: str) -> list[UniversityDict]:
     return unis
 
 @task
+def get_done_combos(output_file: str, keys: tuple) -> set[tuple]:
+    combos_done = set()
+    if os.path.exists(output_file):
+        with open(output_file, "r", encoding="utf-8") as f:
+            objs = [json.loads(line) for line in f]
+            for obj in objs:
+                values = tuple(obj.get(k, "") for k in keys)
+                if all(values):
+                    combos_done.add(values)
+    return combos_done
+
+@task
 def to_upper_slow(name: str) -> str:
     # time.sleep(0.01)
     time.sleep(1)
     return name.upper()
 
 
-@task(cache_policy=TASK_SOURCE+INPUTS, log_prints=True)
+@task(cache_policy=TASK_SOURCE+INPUTS, log_prints=True, tags=['google-search'])
 def google_search(query: str, skip_cache=False) -> list[str]:
     print(f"Searching for {query}...")
     api_key = dotenv.get_key(".env", "GOOGLE_API_KEY")
@@ -75,6 +90,7 @@ def google_search(query: str, skip_cache=False) -> list[str]:
         log.error("Missing GOOGLE_API_KEY or GOOGLE_CSE_ID in .env file")
         return []
     service = build("customsearch", "v1", developerKey=api_key)
+    # with concurrency("google-search", occupy=1):
     res = service.cse().list(q=query, cx=cse_id, num=10).execute()
 
     if len(res.get('items', [])) == 0:
@@ -84,7 +100,9 @@ def google_search(query: str, skip_cache=False) -> list[str]:
     return [item['link'] for item in res.get('items', [])]
 
 @flow(log_prints=True)
-def baseline():
+def baseline(task_runner=ThreadPoolTaskRunner()):
+    log = get_run_logger()
+
     input_file = '../einrichtungen/data/hochschulen.csv'
     output_file = "results_new.jsonlines"
     prompt_template = """Finde heraus ob aus dem Text hervorgeht, dass {software} oder eine auf
@@ -100,22 +118,35 @@ def baseline():
         log.error(e)
         return
 
-    # results = []
-    # # log.info(f"Found {len(universities)} universities.")
-    # for uni in universities:
-    #     name = uni['name']
-    #     results.append(to_upper_slow.submit(name))
-    #     # print(name)
-    #     # print(uni['name'])
-    #     # log.info(f"University: {uni['name']}, Website: {uni['website']}")
-    # wait(results)
+    combos_done = get_done_combos(output_file, keys=("einrichtung", "software"))
+    log.info(f"Found {len(combos_done)} completed combos.")
 
-    # unis = unis[5:6]
-    unis = unis[0:2]
+    # Zähle alle Unis
+    total_unis = len(unis)
+    print(f"Total universities to process: {total_unis}")
+
+    # unique universities
+    unique_unis = {item["name"] for item in unis}
+    print(f"Total unique universities: {len(unique_unis)}")
+
+    # Zähle alle Unis die in combos_done sind
+    unis_done = []
+    unis_todo = []
+    for item in unis:
+        if (item["name"], "Moodle") in combos_done and (item["name"], "Ilias") in combos_done and (item["name"], "OpenOLAT") in combos_done:
+            unis_done.append(item)
+        else:
+            unis_todo.append(item)
+    total_unis_done = len(unis_done)
+    print(f"Total universities already processed: {total_unis_done}")
+
+
+    unis = unis_todo
+    unis = unis[0:20]
 
     jobs = []
     for index, item in enumerate(unis):
-        print(f"Processing {index + 1}/{len(unis)}: {item['name']} ({item['website']})")
+        # print(f"Processing {index + 1}/{len(unis)}: {item['name']} ({item['website']})")
         site = item["website"]
         einrichtung = item["name"]
         # if index > 5:
@@ -129,6 +160,9 @@ def baseline():
             #     continue
             query = f"site:{site} {software}"
             arguments = {"einrichtung": einrichtung, "software": software}
+            # with concurrency("handle-institution", occupy=1):
+            print(f"Processing {index + 1}/{len(unis)}: {item['name']}, {software}")
+
             r = handle_uni.submit(query, prompt_template=prompt_template, arguments=arguments, output_file=output_file)
             jobs.append(r)
             # print(r)
@@ -148,7 +182,7 @@ def _handle_uni_task_name():
     new_name = new_name.replace(" ", "-").lower()
     return new_name
 
-@task(log_prints=True, task_run_name=_handle_uni_task_name)
+@task(log_prints=True, task_run_name=_handle_uni_task_name, tags=['handle-uni'], cache_policy=TASK_SOURCE+INPUTS)
 def handle_uni(query, prompt_template, arguments, output_file):
     # Google search
     urls = google_search(query, skip_cache=False)
@@ -196,11 +230,6 @@ def handle_uni(query, prompt_template, arguments, output_file):
         f.write(json.dumps(res_item) + "\n")
 
     return res_item
-
-        # print("Storing result for", arguments["einrichtung"])
-        # print(x)
-        # store_result(x.model_dump_json(), output_file)
-        # return x
     
 
 

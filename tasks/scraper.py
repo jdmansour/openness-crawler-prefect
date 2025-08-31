@@ -28,7 +28,7 @@ class ErrorBlock(BaseModel):
     content: str
 
 @sync_compatible
-@task(cache_policy=TASK_SOURCE+INPUTS)
+@task(cache_policy=TASK_SOURCE+INPUTS, tags=['scrape-url'])
 async def scrape_url(url: str, prompt_template: str, arguments: dict, skip_cache=False) -> LMSResult:
 
     log = get_run_logger()
@@ -105,6 +105,8 @@ async def scrape_url(url: str, prompt_template: str, arguments: dict, skip_cache
 
 
         log.info("result.error_message: %s", result.error_message)
+        # TODO: we are getting multiple blocks here, investigate if we are handing the chunks
+        # correctly
         log.info("result.extracted_content: %s", result.extracted_content[:1000])
 
         try:
