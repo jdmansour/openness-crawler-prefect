@@ -1,5 +1,4 @@
 import json
-import logging
 from typing import TYPE_CHECKING, Literal
 
 import dotenv
@@ -7,15 +6,12 @@ from crawl4ai import (AsyncWebCrawler, CacheMode, CrawlerRunConfig,
                       CrawlResult, LLMConfig)
 from crawl4ai.processors.pdf import (PDFContentScrapingStrategy,
                                      PDFCrawlerStrategy)
+from prefect import task
+from prefect.cache_policies import INPUTS, TASK_SOURCE
+from prefect.logging import get_run_logger
 from pydantic import BaseModel, TypeAdapter
 
 from crawl4ai_helpers import ChunkLimitedLLMExtractionStrategy
-from prefect import flow, tags, task
-from prefect.logging import get_run_logger
-from prefect.utilities.asyncutils import sync_compatible
-from prefect.cache_policies import TASK_SOURCE, INPUTS
-
-from utils import limit_concurrency
 
 
 class LMSResult(BaseModel):
@@ -29,9 +25,8 @@ class ErrorBlock(BaseModel):
     tags: list[str]
     content: str
 
-@sync_compatible
+# @sync_compatible
 @task(cache_policy=TASK_SOURCE+INPUTS)
-@limit_concurrency(max_workers=5)
 async def scrape_url(url: str, prompt_template: str, arguments: dict) -> LMSResult:
 
     log = get_run_logger()
