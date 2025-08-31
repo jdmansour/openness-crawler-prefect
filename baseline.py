@@ -1,3 +1,4 @@
+import asyncio
 import csv
 import json
 import os
@@ -9,10 +10,8 @@ import dotenv
 from googleapiclient.discovery import build
 from prefect import flow, tags, task
 from prefect.cache_policies import INPUTS, TASK_SOURCE
-from prefect.futures import wait
 from prefect.logging import get_run_logger
 from prefect.runtime import task_run
-from prefect.task_runners import ThreadPoolTaskRunner
 
 from tasks.scraper import scrape_url
 
@@ -97,7 +96,7 @@ def google_search(query: str) -> list[str]:
 
 
 @flow(log_prints=True)
-def baseline(task_runner=ThreadPoolTaskRunner()):
+async def baseline():
     log = get_run_logger()
 
     input_file = '../einrichtungen/data/hochschulen.csv'
@@ -139,7 +138,7 @@ def baseline(task_runner=ThreadPoolTaskRunner()):
     unis = unis_todo
     # unis = unis[0:20]
 
-    jobs = []
+    tasks = []
     for index, item in enumerate(unis):
         site = item["website"]
         einrichtung = item["name"]
@@ -150,10 +149,13 @@ def baseline(task_runner=ThreadPoolTaskRunner()):
             print(
                 f"Processing {index + 1}/{len(unis)}: {item['name']}, {software}")
 
-            r = handle_uni.submit(query, prompt_template=prompt_template,
-                                  arguments=arguments, output_file=output_file)
-            jobs.append(r)
-    wait(jobs)
+            # Erstelle async task statt submit
+            task = handle_uni(query, prompt_template=prompt_template,
+                            arguments=arguments, output_file=output_file)
+            tasks.append(task)
+    
+    # Führe alle Tasks parallel aus
+    await asyncio.gather(*tasks)
 
 
 def _handle_uni_task_name():
@@ -166,20 +168,18 @@ def _handle_uni_task_name():
 
 
 @task(log_prints=True, task_run_name=_handle_uni_task_name, tags=['handle-uni'], cache_policy=TASK_SOURCE+INPUTS)
-def handle_uni(query, prompt_template, arguments, output_file):
+async def handle_uni(query, prompt_template, arguments, output_file):
     # Google search
     urls = google_search(query)
 
     combined_verdict = False
     scraping_results = []
     urls = urls[:5]
+    
     for url in urls:
-        # Scrape URL and apply LLM:
-        aw = scrape_url.submit(url=url,
-                               prompt_template=prompt_template,
-                               arguments=arguments)
-        # Block and wait for the result
-        result = aw.result()
+        result = await scrape_url(url=url,
+                                 prompt_template=prompt_template,
+                                 arguments=arguments)
 
         scraping_results.append(result)
         if result.result:
@@ -216,4 +216,4 @@ def handle_uni(query, prompt_template, arguments, output_file):
 
 if __name__ == "__main__":
     with tags("baseline"):
-        baseline()
+        asyncio.run(baseline())
