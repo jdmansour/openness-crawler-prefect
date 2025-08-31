@@ -15,6 +15,8 @@ from prefect.logging import get_run_logger
 from prefect.utilities.asyncutils import sync_compatible
 from prefect.cache_policies import TASK_SOURCE, INPUTS
 
+from utils import limit_concurrency
+
 
 class LMSResult(BaseModel):
     reasoning: str
@@ -28,8 +30,9 @@ class ErrorBlock(BaseModel):
     content: str
 
 @sync_compatible
-@task(cache_policy=TASK_SOURCE+INPUTS, tags=['scrape-url'])
-async def scrape_url(url: str, prompt_template: str, arguments: dict, skip_cache=False) -> LMSResult:
+@task(cache_policy=TASK_SOURCE+INPUTS)
+@limit_concurrency(max_workers=5)
+async def scrape_url(url: str, prompt_template: str, arguments: dict) -> LMSResult:
 
     log = get_run_logger()
 

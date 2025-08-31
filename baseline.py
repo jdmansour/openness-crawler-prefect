@@ -19,6 +19,8 @@ from tasks.scraper import scrape_url  # Importing the scrape_url task
 import asyncio
 import json
 
+from utils import limit_concurrency
+
 log = logging.getLogger("baseline")
 
 class UniversityDict(TypedDict):
@@ -183,6 +185,7 @@ def _handle_uni_task_name():
     return new_name
 
 @task(log_prints=True, task_run_name=_handle_uni_task_name, tags=['handle-uni'], cache_policy=TASK_SOURCE+INPUTS)
+# @limit_concurrency(max_workers=3)
 def handle_uni(query, prompt_template, arguments, output_file):
     # Google search
     urls = google_search(query, skip_cache=False)
