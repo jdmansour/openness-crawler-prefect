@@ -61,11 +61,12 @@ async def baseline() -> None:
     log = get_run_logger()
 
     # import definitions.openaccess as mod
-    import definitions.open_lms as mod
+    # import definitions.open_lms as mod
+    from definitions.openaccess import OpenAccess as mod
+    # from definitions.open_lms import OpenLMS as mod
 
     # mod = definitions.openaccess
 
-    input_file = mod.input_file
     output_file = mod.output_file
     combo_keys = mod.combo_keys
     query_template = mod.query_template
@@ -74,7 +75,7 @@ async def baseline() -> None:
     make_combos = mod.make_combos
 
     try:
-        unis = load_institutions(input_file)
+        unis = load_institutions()
         unis_dict = {uni["name"]: uni for uni in unis}
     except FileNotFoundError as e:
         log.error(e)
