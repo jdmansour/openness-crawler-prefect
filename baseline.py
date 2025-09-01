@@ -1,11 +1,8 @@
 import asyncio
-import csv
 import json
 import os
-import re
 import textwrap
 import time
-from typing import TypedDict
 
 import dotenv
 from googleapiclient.discovery import build
@@ -15,46 +12,8 @@ from prefect.cache_policies import INPUTS, TASK_SOURCE
 from prefect.logging import get_run_logger
 from prefect.runtime import task_run
 
+from read_universities import read_universities
 from tasks.scraper import scrape_url
-
-
-class UniversityDict(TypedDict):
-    website: str
-    name: str
-
-
-@task
-def read_universities(filename: str) -> list[UniversityDict]:
-    log = get_run_logger()
-
-    if not os.path.exists(filename):
-        raise FileNotFoundError(f"File {filename} does not exist.")
-
-    # parse csv
-    # get columns website and Hochschulname
-    # remove http(s):// and www. from website
-    unis: list[UniversityDict] = []
-    with open(filename, "r", encoding="utf-8") as f:
-        reader = csv.DictReader(f, delimiter=",")
-        for row in reader:
-            # Universität
-            if row.get("Hochschultyp", "").strip() != "Universität":
-                continue
-
-            website = row["website"].strip()
-            if not website:
-                log.warning(f"Skipping row with empty website: {row}")
-                continue
-            # remove http(s):// and www.
-            website = re.sub(r"^https?://(www\.)?", "", website)
-            # remove trailing slash
-            website = website.rstrip("/")
-            # add to list
-            unis.append({'website': website, 'name': row["Hochschulname"]})
-
-    # Make unique by name
-    unis = list({uni["name"]: uni for uni in unis}.values())
-    return unis
 
 
 @task
@@ -97,30 +56,25 @@ def google_search(query: str) -> list[str]:
     return [item['link'] for item in res.get('items', [])]
 
 
-def make_combos(einrichtungen: list[str]) -> set[tuple]:
-    options = ["Moodle", "Ilias", "OpenOLAT"]
-    combos = {(einrichtung, software)
-              for einrichtung in einrichtungen
-              for software in options}
-    return combos
-
 @flow(log_prints=True)
 async def baseline() -> None:
     log = get_run_logger()
 
-    input_file = '../einrichtungen/data/hochschulen.csv'
-    output_file = "results_openaccess.jsonlines"
-    combo_keys = ("einrichtung", )
-    query_template = "{einrichtung} Open Access Richtlinie"
-    prompt_template = (
-        "Finde heraus ob aus dem Text hervorgeht, dass es an der Einrichtung '{einrichtung}' eine "
-        "Open-Access-Policy, Leitlinie o.ä. gibt, welche die Publikation in Open Access Journalen "
-        "empfiehlt oder unterstützt. Antworte mit Ja oder Nein, der URL und einer kurzen Begründung. "
-        "Antworte im JSON-Format. Gebe eine kurze Begründung im Feld `reasoning` an, sowie das"
-        "Ergebnis `true` oder `false` im Feld `result`.")
-    
+    # import definitions.openaccess as mod
+    import definitions.open_lms as mod
+
+    # mod = definitions.openaccess
+
+    input_file = mod.input_file
+    output_file = mod.output_file
+    combo_keys = mod.combo_keys
+    query_template = mod.query_template
+    prompt_template = mod.prompt_template
+    load_institutions = mod.load_institutions
+    make_combos = mod.make_combos
+
     try:
-        unis = read_universities(input_file)
+        unis = load_institutions(input_file)
         unis_dict = {uni["name"]: uni for uni in unis}
     except FileNotFoundError as e:
         log.error(e)
@@ -129,28 +83,8 @@ async def baseline() -> None:
     # Filter: only universities with "Humboldt" in name
     # unis = [uni for uni in unis if "Humboldt" in uni["name"]]
 
-    all_combos = {(uni['name'],) for uni in unis}
-
-    # ------
-    # input_file = '../einrichtungen/data/hochschulen.csv'
-    # output_file = "results_new.jsonlines"
-    # combo_keys = ("einrichtung", "software")
-    # query_template = "site:{website}"
-    # prompt_template = (
-    #     "Finde heraus ob aus dem Text hervorgeht, dass {software} oder eine auf {software} "
-    #     "basierende Software in der Einrichtung {einrichtung} genutzt wird. Antworte im "
-    #     "JSON-Format. Gebe eine kurze Begründung im Feld `reasoning` an, sowie das Ergebnis "
-    #     "`true` oder `false` im Feld `result`.")
-
-    # try:
-    #     unis = read_universities(input_file)
-    #     unis_dict = {uni["name"]: uni for uni in unis}
-    # except FileNotFoundError as e:
-    #     log.error(e)
-    #     return
-
-    # all_combos = make_combos([uni["name"] for uni in unis])
-    # ------
+    uni_names = [uni['name'] for uni in unis]
+    all_combos = make_combos(uni_names)
 
     combos_done = get_done_combos(output_file, keys=combo_keys)
     combos_todo = all_combos - combos_done
