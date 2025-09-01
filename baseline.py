@@ -3,12 +3,14 @@ import csv
 import json
 import os
 import re
+import textwrap
 import time
 from typing import TypedDict
 
 import dotenv
 from googleapiclient.discovery import build
 from prefect import flow, tags, task
+from prefect.artifacts import create_markdown_artifact
 from prefect.cache_policies import INPUTS, TASK_SOURCE
 from prefect.logging import get_run_logger
 from prefect.runtime import task_run
@@ -101,10 +103,11 @@ async def baseline():
 
     input_file = '../einrichtungen/data/hochschulen.csv'
     output_file = "results_new.jsonlines"
-    prompt_template = """Finde heraus ob aus dem Text hervorgeht, dass {software} oder eine auf
-    {software} basierende Software in der Einrichtung {einrichtung} genutzt wird. Antworte im
-    JSON-Format. Gebe eine kurze Begründung im Feld `reasoning` an, sowie das Ergebnis
-    `true` oder `false` im Feld `result`."""
+    prompt_template = textwrap.dedent("""\
+        Finde heraus ob aus dem Text hervorgeht, dass {software} oder eine auf
+        {software} basierende Software in der Einrichtung {einrichtung} genutzt wird. Antworte im
+        JSON-Format. Gebe eine kurze Begründung im Feld `reasoning` an, sowie das Ergebnis
+        `true` oder `false` im Feld `result`.""")
 
     try:
         unis = read_universities(input_file)
@@ -167,8 +170,8 @@ def _handle_uni_task_name():
     return new_name
 
 
-@task(log_prints=True, task_run_name=_handle_uni_task_name, tags=['handle-uni'], cache_policy=TASK_SOURCE+INPUTS)
-async def handle_uni(query, prompt_template, arguments, output_file):
+@task(log_prints=True, task_run_name=_handle_uni_task_name, tags=['handle-uni'])
+async def handle_uni(query: str, prompt_template: str, arguments: dict[str, str], output_file: str) -> dict:
     # Google search
     urls = google_search(query)
 
@@ -202,13 +205,40 @@ async def handle_uni(query, prompt_template, arguments, output_file):
         'inputs': combined_inputs,
     }
 
-    res_item = {
+    res_item: dict = {
         "result": combined_verdict,
     }
     res_item.update(arguments)
     res_item['reasoning'] = combined_reasoning
 
-    with open(output_file, "a") as f:
+    # Create prefect artifact (markdown report)
+    prompt = prompt_template.format(**arguments)
+
+    markdown = textwrap.dedent(f"""\
+        # handle_uni results
+        - **Query:** {query}
+        - **Prompt:** {prompt}
+        - **Result:** {combined_verdict}
+        - **Reasoning:** {summary}
+
+        ## Inputs:
+        Analyzed the following URLs:
+        """)
+    
+    for url, result in zip(urls, scraping_results):
+        markdown += textwrap.dedent(f"""\
+            - **URL:** {url}
+              **Result:** {result.result}
+              **Reasoning:** {result.reasoning}
+            """)
+
+    await create_markdown_artifact(
+        markdown=markdown,
+        key="handle-uni-results",
+        description="results for handle_uni"
+    )  # type: ignore
+
+    with open(output_file, "a", encoding='utf-8') as f:
         f.write(json.dumps(res_item, ensure_ascii=False) + "\n")
 
     return res_item

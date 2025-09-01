@@ -9,6 +9,7 @@ from crawl4ai.processors.pdf import (PDFContentScrapingStrategy,
 from prefect import task
 from prefect.cache_policies import INPUTS, TASK_SOURCE
 from prefect.logging import get_run_logger
+from prefect.artifacts import create_markdown_artifact
 from pydantic import BaseModel, TypeAdapter
 
 from crawl4ai_helpers import ChunkLimitedLLMExtractionStrategy
@@ -149,5 +150,16 @@ async def scrape_url(url: str, prompt_template: str, arguments: dict) -> LMSResu
         else:
             # reasoning = f"URL: {url};"
             reasoning = "No mention found."
+
+        markdown_report = f"""
+# Scraping Results
+- **URL:** {url}
+- **Reasoning:** {reasoning}
+- **Result:** {result}
+"""
+        await create_markdown_artifact(
+            markdown=markdown_report,
+            key="scrape-url-results"
+        )
 
         return LMSResult(reasoning=reasoning, result=usage_found)
