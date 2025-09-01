@@ -97,19 +97,28 @@ def google_search(query: str) -> list[str]:
     return [item['link'] for item in res.get('items', [])]
 
 
+def make_combos(einrichtungen: list[str]) -> set[tuple]:
+    options = ["Moodle", "Ilias", "OpenOLAT"]
+    combos = {(einrichtung, software)
+              for einrichtung in einrichtungen
+              for software in options}
+    return combos
+
 @flow(log_prints=True)
-async def baseline():
+async def baseline() -> None:
     log = get_run_logger()
 
     input_file = '../einrichtungen/data/hochschulen.csv'
-    output_file = "results_new.jsonlines"
-    combo_keys = ("einrichtung", "software")
+    output_file = "results_openaccess.jsonlines"
+    combo_keys = ("einrichtung", )
+    query_template = "{einrichtung} Open Access Richtlinie"
     prompt_template = (
-        "Finde heraus ob aus dem Text hervorgeht, dass {software} oder eine auf {software} "
-        "basierende Software in der Einrichtung {einrichtung} genutzt wird. Antworte im "
-        "JSON-Format. Gebe eine kurze Begründung im Feld `reasoning` an, sowie das Ergebnis "
-        "`true` oder `false` im Feld `result`.")
-
+        "Finde heraus ob aus dem Text hervorgeht, dass es an der Einrichtung '{einrichtung}' eine "
+        "Open-Access-Policy, Leitlinie o.ä. gibt, welche die Publikation in Open Access Journalen "
+        "empfiehlt oder unterstützt. Antworte mit Ja oder Nein, der URL und einer kurzen Begründung. "
+        "Antworte im JSON-Format. Gebe eine kurze Begründung im Feld `reasoning` an, sowie das"
+        "Ergebnis `true` oder `false` im Feld `result`.")
+    
     try:
         unis = read_universities(input_file)
         unis_dict = {uni["name"]: uni for uni in unis}
@@ -117,36 +126,53 @@ async def baseline():
         log.error(e)
         return
 
+    # Filter: only universities with "Humboldt" in name
+    # unis = [uni for uni in unis if "Humboldt" in uni["name"]]
+
+    all_combos = {(uni['name'],) for uni in unis}
+
+    # ------
+    # input_file = '../einrichtungen/data/hochschulen.csv'
+    # output_file = "results_new.jsonlines"
+    # combo_keys = ("einrichtung", "software")
+    # query_template = "site:{website}"
+    # prompt_template = (
+    #     "Finde heraus ob aus dem Text hervorgeht, dass {software} oder eine auf {software} "
+    #     "basierende Software in der Einrichtung {einrichtung} genutzt wird. Antworte im "
+    #     "JSON-Format. Gebe eine kurze Begründung im Feld `reasoning` an, sowie das Ergebnis "
+    #     "`true` oder `false` im Feld `result`.")
+
+    # try:
+    #     unis = read_universities(input_file)
+    #     unis_dict = {uni["name"]: uni for uni in unis}
+    # except FileNotFoundError as e:
+    #     log.error(e)
+    #     return
+
+    # all_combos = make_combos([uni["name"] for uni in unis])
+    # ------
+
     combos_done = get_done_combos(output_file, keys=combo_keys)
-    log.info("Found %d completed combos.", len(combos_done))
-
-    # Zähle alle Unis
-    total_unis = len(unis)
-    log.info("Total universities to process: %d", total_unis)
-
-    # unique universities
-    unique_unis = {item["name"] for item in unis}
-    log.info("Total unique universities: %d", len(unique_unis))
-
-    # total combinations to process
-    options = ["Moodle", "Ilias", "OpenOLAT"]
-    all_combos = {(uni["name"], software) for uni in unis for software in options}
-
-    #combos_done = []
     combos_todo = all_combos - combos_done
 
     print("Total of %d inputs", len(all_combos))
     print("Already done: %d", len(combos_done))
     print("Remaining: %d", len(combos_todo))
 
+    # # Limit to 10 combos
+    # combos_todo = list(combos_todo)[:10]
+
     tasks = []
     for i, combo in enumerate(combos_todo):
         arguments = dict(zip(combo_keys, combo))
         einrichtung = arguments["einrichtung"]
         item = unis_dict[einrichtung]
-        website = item["website"]
 
-        query = f"site:{website} {arguments['software']}"
+        values: dict = arguments.copy()
+        values.update(item)
+
+        # query = f"site:{website} {arguments['software']}"
+        query = query_template.format(**values)
         print(f"Processing {i + 1}/{len(combos_todo)}: {combo}")
 
         task = handle_uni(query, prompt_template=prompt_template,
@@ -161,7 +187,10 @@ def _handle_uni_task_name():
     task_name = task_run.task_name
     parameters = task_run.parameters
     arguments = parameters.get("arguments", {})
-    new_name = f"{task_name}-{arguments.get('einrichtung','unknown')}-{arguments.get('software','unknown')}"
+
+    new_name = task_name
+    for v in arguments.values():
+        new_name += '-' + str(v)
     new_name = new_name.replace(" ", "-").lower()
     return new_name
 
@@ -174,7 +203,7 @@ async def handle_uni(query: str, prompt_template: str, arguments: dict[str, str]
     combined_verdict = False
     scraping_results = []
     urls = urls[:5]
-    
+
     for url in urls:
         result = await scrape_url(url=url,
                                  prompt_template=prompt_template,
@@ -186,36 +215,17 @@ async def handle_uni(query: str, prompt_template: str, arguments: dict[str, str]
             # exit early
             break
 
-    combined_inputs = [
-        {"url": url, "result": result.result, "reasoning": result.reasoning}
-        for url, result in zip(urls, scraping_results)
-    ]
-
-    if not combined_verdict:
-        summary = "No evidence found"
-    else:
-        summary = "Evidence found"
-
-    combined_reasoning = {
-        'summary': summary,
-        'inputs': combined_inputs,
-    }
-
-    res_item: dict = {
-        "result": combined_verdict,
-    }
-    res_item.update(arguments)
-    res_item['reasoning'] = combined_reasoning
-
     # Create prefect artifact (markdown report)
     prompt = prompt_template.format(**arguments)
-
+    args_markdown = "\n".join(f"    - {k}: {v}" for k, v in arguments.items())
     markdown = textwrap.dedent(f"""\
         # handle_uni results
         - **Query:** {query}
         - **Prompt:** {prompt}
+        - **Arguments:**
+        {args_markdown}
         - **Result:** {combined_verdict}
-        - **Reasoning:** {summary}
+        - **Reasoning:**
 
         ## Inputs:
         Analyzed the following URLs:
@@ -228,11 +238,33 @@ async def handle_uni(query: str, prompt_template: str, arguments: dict[str, str]
               **Reasoning:** {result.reasoning}
             """)
 
+    description = f"Results for {arguments['einrichtung']}"
+
     await create_markdown_artifact(
         markdown=markdown,
         key="handle-uni-results",
-        description="results for handle_uni"
+        description=description
     )  # type: ignore
+
+    # Return result as JSON
+    combined_inputs = [
+        {"url": url, "result": result.result, "reasoning": result.reasoning}
+        for url, result in zip(urls, scraping_results)
+    ]
+
+    if not combined_verdict:
+        summary = "No evidence found"
+    else:
+        summary = "Evidence found"
+
+    res_item: dict = {
+        "result": combined_verdict,
+    }
+    res_item.update(arguments)
+    res_item['reasoning'] = {
+        'summary': summary,
+        'inputs': combined_inputs,
+    }
 
     with open(output_file, "a", encoding='utf-8') as f:
         f.write(json.dumps(res_item, ensure_ascii=False) + "\n")
