@@ -103,20 +103,21 @@ async def baseline():
 
     input_file = '../einrichtungen/data/hochschulen.csv'
     output_file = "results_new.jsonlines"
-    prompt_template = textwrap.dedent("""\
-        Finde heraus ob aus dem Text hervorgeht, dass {software} oder eine auf
-        {software} basierende Software in der Einrichtung {einrichtung} genutzt wird. Antworte im
-        JSON-Format. Gebe eine kurze Begründung im Feld `reasoning` an, sowie das Ergebnis
-        `true` oder `false` im Feld `result`.""")
+    combo_keys = ("einrichtung", "software")
+    prompt_template = (
+        "Finde heraus ob aus dem Text hervorgeht, dass {software} oder eine auf {software} "
+        "basierende Software in der Einrichtung {einrichtung} genutzt wird. Antworte im "
+        "JSON-Format. Gebe eine kurze Begründung im Feld `reasoning` an, sowie das Ergebnis "
+        "`true` oder `false` im Feld `result`.")
 
     try:
         unis = read_universities(input_file)
+        unis_dict = {uni["name"]: uni for uni in unis}
     except FileNotFoundError as e:
         log.error(e)
         return
 
-    combos_done = get_done_combos(
-        output_file, keys=("einrichtung", "software"))
+    combos_done = get_done_combos(output_file, keys=combo_keys)
     log.info("Found %d completed combos.", len(combos_done))
 
     # Zähle alle Unis
@@ -127,35 +128,30 @@ async def baseline():
     unique_unis = {item["name"] for item in unis}
     log.info("Total unique universities: %d", len(unique_unis))
 
-    # Zähle alle Unis die in combos_done sind
-    unis_done = []
-    unis_todo = []
-    for item in unis:
-        if (item["name"], "Moodle") in combos_done and (item["name"], "Ilias") in combos_done and (item["name"], "OpenOLAT") in combos_done:
-            unis_done.append(item)
-        else:
-            unis_todo.append(item)
-    total_unis_done = len(unis_done)
-    print(f"Total universities already processed: {total_unis_done}")
+    # total combinations to process
+    options = ["Moodle", "Ilias", "OpenOLAT"]
+    all_combos = {(uni["name"], software) for uni in unis for software in options}
 
-    unis = unis_todo
-    # unis = unis[0:20]
+    #combos_done = []
+    combos_todo = all_combos - combos_done
+
+    print("Total of %d inputs", len(all_combos))
+    print("Already done: %d", len(combos_done))
+    print("Remaining: %d", len(combos_todo))
 
     tasks = []
-    for index, item in enumerate(unis):
-        site = item["website"]
-        einrichtung = item["name"]
+    for i, combo in enumerate(combos_todo):
+        arguments = dict(zip(combo_keys, combo))
+        einrichtung = arguments["einrichtung"]
+        item = unis_dict[einrichtung]
+        website = item["website"]
 
-        for software in ["Moodle", "Ilias", "OpenOLAT"]:
-            query = f"site:{site} {software}"
-            arguments = {"einrichtung": einrichtung, "software": software}
-            print(
-                f"Processing {index + 1}/{len(unis)}: {item['name']}, {software}")
+        query = f"site:{website} {arguments['software']}"
+        print(f"Processing {i + 1}/{len(combos_todo)}: {combo}")
 
-            # Erstelle async task statt submit
-            task = handle_uni(query, prompt_template=prompt_template,
-                            arguments=arguments, output_file=output_file)
-            tasks.append(task)
+        task = handle_uni(query, prompt_template=prompt_template,
+                          arguments=arguments, output_file=output_file)
+        tasks.append(task)
     
     # Führe alle Tasks parallel aus
     await asyncio.gather(*tasks)
