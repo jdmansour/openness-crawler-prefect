@@ -1,8 +1,12 @@
 import asyncio
+import importlib
 import json
 import os
+import pkgutil
+import sys
 import textwrap
 import time
+from typing import Type
 
 import dotenv
 from googleapiclient.discovery import build
@@ -12,7 +16,8 @@ from prefect.cache_policies import INPUTS, TASK_SOURCE
 from prefect.logging import get_run_logger
 from prefect.runtime import task_run
 
-from read_universities import read_universities
+import definitions
+from definitions.base import BaseDefinition
 from tasks.scraper import scrape_url
 
 
@@ -56,17 +61,20 @@ def google_search(query: str) -> list[str]:
     return [item['link'] for item in res.get('items', [])]
 
 
+def get_definition_class(modulename: str) -> Type[BaseDefinition]:
+    mod = importlib.import_module(f"definitions.{modulename}")
+    for name in dir(mod):
+        obj = getattr(mod, name)
+        if isinstance(obj, type) and issubclass(obj, BaseDefinition) and obj is not BaseDefinition:
+            print(f"Found definition class: {name}")
+            return obj
+    raise ValueError(f"No definition class found in {modulename}")
+
 @flow(log_prints=True)
-async def baseline() -> None:
+async def baseline(modulename: str) -> None:
     log = get_run_logger()
-
-    # import definitions.openaccess as mod
-    # import definitions.open_lms as mod
-    from definitions.openaccess import OpenAccess as mod
-    # from definitions.open_lms import OpenLMS as mod
-
-    # mod = definitions.openaccess
-
+    
+    mod = get_definition_class(modulename)
     output_file = mod.output_file
     combo_keys = mod.combo_keys
     query_template = mod.query_template
@@ -156,12 +164,13 @@ async def handle_uni(query: str, prompt_template: str, arguments: dict[str, str]
     markdown = textwrap.dedent(f"""\
         # handle_uni results
         - **Query:** {query}
-        - **Prompt:** {prompt}
+        - **Prompt:**
+        {textwrap.indent(prompt, "  ")}
         - **Arguments:**
         {args_markdown}
         - **Result:** {combined_verdict}
         - **Reasoning:**
-
+        
         ## Inputs:
         Analyzed the following URLs:
         """)
@@ -207,6 +216,33 @@ async def handle_uni(query: str, prompt_template: str, arguments: dict[str, str]
     return res_item
 
 
-if __name__ == "__main__":
+def list_modules() -> list[str]:
+    return [
+        module.name
+        for module in pkgutil.iter_modules(definitions.__path__)
+        if module.name != "base"
+    ]
+
+def usage(modules: list[str]):
+    print("Usage: python baseline.py <modulename>")
+    print("Where <modulename> is one of the following:")
+    for name in modules:
+        print(f"  - {name}")
+    
+
+def main():
+    modules = list_modules()
+    if len(sys.argv) != 2:
+        usage(modules)
+        sys.exit(1)
+
+    modulename = sys.argv[1]
+    if modulename not in list_modules():
+        usage(modules)
+        sys.exit(1)
+
     with tags("baseline"):
-        asyncio.run(baseline())
+        asyncio.run(baseline(modulename))
+
+if __name__ == "__main__":
+    main()
