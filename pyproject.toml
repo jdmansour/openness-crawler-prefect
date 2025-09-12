@@ -17,4 +17,5 @@ dependencies = [
 [dependency-groups]
 dev = [
     "google-api-python-client-stubs>=1.30.0",
+    "pytest>=8.4.1",
 ]
