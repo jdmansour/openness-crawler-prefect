@@ -24,7 +24,7 @@ class ErrorBlock(BaseModel):
     index: int
     error: Literal[True] = True
     tags: list[str]
-    content: str
+    content: str | list[str]
 
 # @sync_compatible
 @task(cache_policy=TASK_SOURCE+INPUTS)
