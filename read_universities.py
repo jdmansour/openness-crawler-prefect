@@ -1,22 +1,24 @@
 
 
+import csv
+import os
+import re
 from typing import TypedDict
+
 from prefect import task
 from prefect.logging import get_run_logger
 
 
-import csv
-import os
-import re
-
-
 class UniversityDict(TypedDict):
+    """ Eine Hochschule mit Name und Webseite. """
     website: str
     name: str
 
 
 @task
 def read_universities(filename: str) -> list[UniversityDict]:
+    """ Liest eine CSV-Datei mit Hochschulen ein, und gibt eine Liste der Namen und Webseiten
+        zurück. """
     log = get_run_logger()
 
     if not os.path.exists(filename):
@@ -35,7 +37,7 @@ def read_universities(filename: str) -> list[UniversityDict]:
 
             website = row["website"].strip()
             if not website:
-                log.warning(f"Skipping row with empty website: {row}")
+                log.warning("Skipping row with empty website: %r", row)
                 continue
             # remove http(s):// and www.
             website = re.sub(r"^https?://(www\.)?", "", website)

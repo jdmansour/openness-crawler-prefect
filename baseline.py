@@ -5,7 +5,6 @@ import os
 import pkgutil
 import sys
 import textwrap
-import time
 from typing import Type
 
 import dotenv
@@ -34,34 +33,31 @@ def get_done_combos(output_file: str, keys: tuple) -> set[tuple]:
     return combos_done
 
 
-@task
-def to_upper_slow(name: str) -> str:
-    # time.sleep(0.01)
-    time.sleep(1)
-    return name.upper()
-
-
 @task(cache_policy=TASK_SOURCE+INPUTS, log_prints=True, tags=['google-search'])
 def google_search(query: str) -> list[str]:
+    """ Führt eine Google-Suche aus und gibt eine Liste von URLs zurück. """
+
     log = get_run_logger()
-    log.info(f"Searching for {query}...")
+    log.info("Searching for %s...", query)
     api_key = dotenv.get_key(".env", "GOOGLE_API_KEY")
     cse_id = dotenv.get_key(".env", "GOOGLE_CSE_ID")
     if not api_key or not cse_id:
         log.error("Missing GOOGLE_API_KEY or GOOGLE_CSE_ID in .env file")
         return []
     service = build("customsearch", "v1", developerKey=api_key)
-    # with concurrency("google-search", occupy=1):
-    res = service.cse().list(q=query, cx=cse_id, num=10).execute()
+    res = service.cse().list(q=query, cx=cse_id, num=10).execute()  # pylint: disable=E1101
 
     if len(res.get('items', [])) == 0:
         log.warning("No results found for query: %s", query)
         log.warning("response: %s", res)
 
-    return [item['link'] for item in res.get('items', [])]
+    return [item.get('link', '') for item in res.get('items', []) if 'link' in item]
 
 
 def get_definition_class(modulename: str) -> Type[BaseDefinition]:
+    """ Findet eine Crawler-Definition nach dem Namen der Python-Datei.  Es wird die Klasse
+        als Typ zurückgegeben.  Wenn keine Definition gefunden wird, wird ein ValueError
+        ausgelöst. """
     mod = importlib.import_module(f"definitions.{modulename}")
     for name in dir(mod):
         obj = getattr(mod, name)
@@ -70,10 +66,11 @@ def get_definition_class(modulename: str) -> Type[BaseDefinition]:
             return obj
     raise ValueError(f"No definition class found in {modulename}")
 
+
 @flow(log_prints=True)
 async def baseline(modulename: str) -> None:
     log = get_run_logger()
-    
+
     mod = get_definition_class(modulename)
     output_file = mod.output_file
     combo_keys = mod.combo_keys
@@ -105,7 +102,7 @@ async def baseline(modulename: str) -> None:
     # # Limit to 10 combos
     # combos_todo = list(combos_todo)[:10]
 
-    tasks = []
+    jobs = []
     for i, combo in enumerate(combos_todo):
         arguments = dict(zip(combo_keys, combo))
         einrichtung = arguments["einrichtung"]
@@ -114,16 +111,15 @@ async def baseline(modulename: str) -> None:
         values: dict = arguments.copy()
         values.update(item)
 
-        # query = f"site:{website} {arguments['software']}"
         query = query_template.format(**values)
         print(f"Processing {i + 1}/{len(combos_todo)}: {combo}")
 
-        task = handle_uni(query, prompt_template=prompt_template,
-                          arguments=arguments, output_file=output_file)
-        tasks.append(task)
-    
-    # Führe alle Tasks parallel aus
-    await asyncio.gather(*tasks)
+        job = handle_uni(query, prompt_template=prompt_template,
+                         arguments=arguments, output_file=output_file)
+        jobs.append(job)
+
+    # Führe alle Aufgaben parallel aus
+    await asyncio.gather(*jobs)
 
 
 def _handle_uni_task_name():
@@ -140,6 +136,8 @@ def _handle_uni_task_name():
 
 @task(log_prints=True, task_run_name=_handle_uni_task_name, tags=['handle-uni'])
 async def handle_uni(query: str, prompt_template: str, arguments: dict[str, str], output_file: str) -> dict:
+    """ Behandelt eine Institution mit einer Suchabfrage und einem bestimmten Prompt. """
+
     # Google search
     urls = google_search(query)
 
@@ -149,8 +147,8 @@ async def handle_uni(query: str, prompt_template: str, arguments: dict[str, str]
 
     for url in urls:
         result = await scrape_url(url=url,
-                                 prompt_template=prompt_template,
-                                 arguments=arguments)
+                                  prompt_template=prompt_template,
+                                  arguments=arguments)
 
         scraping_results.append(result)
         if result.result:
@@ -174,7 +172,7 @@ async def handle_uni(query: str, prompt_template: str, arguments: dict[str, str]
         ## Inputs:
         Analyzed the following URLs:
         """)
-    
+
     for url, result in zip(urls, scraping_results):
         markdown += textwrap.dedent(f"""\
             - **URL:** {url}
@@ -217,18 +215,21 @@ async def handle_uni(query: str, prompt_template: str, arguments: dict[str, str]
 
 
 def list_modules() -> list[str]:
+    """ Listet alle verfügbaren Crawler-Definitionen auf. """
     return [
         module.name
         for module in pkgutil.iter_modules(definitions.__path__)
         if module.name != "base"
     ]
 
+
 def usage(modules: list[str]):
+    """ Gibt die Verwendung des Skriptes aus. """
     print("Usage: python baseline.py <modulename>")
     print("Where <modulename> is one of the following:")
     for name in modules:
         print(f"  - {name}")
-    
+
 
 def main():
     modules = list_modules()
@@ -243,6 +244,7 @@ def main():
 
     with tags("baseline"):
         asyncio.run(baseline(modulename))
+
 
 if __name__ == "__main__":
     main()

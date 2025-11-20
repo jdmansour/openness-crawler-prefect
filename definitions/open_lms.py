@@ -3,7 +3,7 @@ from read_universities import read_universities
 
 class OpenLMS(BaseDefinition):
     input_file = '../einrichtungen/data/hochschulen.csv'
-    output_file = "results_new.jsonlines"
+    output_file = "results_open_lms.jsonlines"
     combo_keys = ("einrichtung", "software")
     # query_template = "site:{website} {software}"
     query_template = "{einrichtung} {software}"
